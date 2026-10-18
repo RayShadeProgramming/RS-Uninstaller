@@ -9,7 +9,7 @@ import sys
 import threading
 
 APP_NAME = "RS-Uninstaller"
-APP_VERSION = "0.1.0"
+APP_VERSION = "0.1.1"
 
 _log_lock = threading.Lock()
 

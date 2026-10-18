@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import stat
 import winreg
 
 from . import winreg_api as wreg
@@ -14,6 +15,7 @@ from .util import (
     app_data_dir,
     ensure_dir,
     format_bytes,
+    is_protected_path,
     log,
     now_stamp,
     path_exists,
@@ -70,6 +72,46 @@ def move_to_quarantine(src: str, session: str) -> tuple[bool, str, str]:
     if os.path.exists(full):
         return False, dest, "已备份，但原路径仍然存在（文件可能被占用）"
     return True, dest, ""
+
+
+def _force_remove(path: str) -> None:
+    try:
+        os.chmod(path, stat.S_IWRITE)
+    except OSError:
+        pass
+    os.remove(path)
+
+
+def _rm_error(func, path, _exc_info) -> None:
+    try:
+        os.chmod(path, stat.S_IWRITE)
+        func(path)
+    except OSError:
+        pass
+
+
+def delete_path(path: str) -> tuple[bool, str]:
+    """永久删除文件或目录（不进隔离区）。"""
+    if not path:
+        return False, "路径为空"
+
+    full = os.path.abspath(path)
+    if not os.path.exists(full):
+        return True, ""
+    if is_protected_path(full):
+        return False, "受保护的路径，已拒绝删除"
+
+    try:
+        if os.path.isdir(full) and not os.path.islink(full):
+            shutil.rmtree(full, onerror=_rm_error)
+        else:
+            _force_remove(full)
+    except OSError as exc:
+        return False, f"删除失败：{exc}"
+
+    if os.path.exists(full):
+        return False, "删除后路径仍然存在（文件可能被占用）"
+    return True, ""
 
 
 # ------------------------------------------------------------------ 注册表快照
@@ -264,6 +306,39 @@ def list_sessions() -> list[str]:
     return sorted(names, reverse=True)
 
 
+def clear_quarantine() -> tuple[int, int, list[str]]:
+    """删除隔离区内的全部会话，返回 (成功数, 失败数, 错误列表)。"""
+    root = quarantine_root()
+    if not os.path.isdir(root):
+        return 0, 0, []
+
+    try:
+        sessions = [entry for entry in os.scandir(root) if entry.is_dir()]
+    except OSError as exc:
+        return 0, 0, [str(exc)]
+
+    deleted = 0
+    failed = 0
+    errors: list[str] = []
+
+    for entry in sessions:
+        try:
+            shutil.rmtree(entry.path, onerror=_rm_error)
+        except OSError as exc:
+            failed += 1
+            errors.append(f"{entry.name}：{exc}")
+            continue
+
+        if os.path.exists(entry.path):
+            failed += 1
+            errors.append(f"{entry.name}：仍有文件未能删除（可能被占用）")
+        else:
+            deleted += 1
+
+    log(f"清空隔离区：删除 {deleted} 个会话，失败 {failed}")
+    return deleted, failed, errors
+
+
 __all__ = [
     "quarantine_root",
     "new_session",
@@ -273,6 +348,8 @@ __all__ = [
     "append_journal",
     "restore_session",
     "list_sessions",
+    "clear_quarantine",
+    "delete_path",
     "create_restore_point",
     "format_bytes",
 ]

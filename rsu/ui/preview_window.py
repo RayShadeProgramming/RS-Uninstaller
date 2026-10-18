@@ -98,13 +98,26 @@ class PreviewWindow(tk.Toplevel):
         )
         self.chk_restore.grid(row=0, column=0, sticky="w")
 
+        self.var_keep_backup = tk.BooleanVar(value=False)
+        self.chk_keep_backup = ttk.Checkbutton(
+            options, text="保留备份到隔离区（可还原）",
+            variable=self.var_keep_backup,
+        )
+        self.chk_keep_backup.grid(row=1, column=0, sticky="w", pady=(4, 0))
+
+        ttk.Label(
+            options,
+            text="默认永久删除，不保留备份；勾选后文件移入隔离区，可随时还原。",
+            foreground="#777777",
+        ).grid(row=2, column=0, sticky="w", pady=(2, 0))
+
         self.status = tk.StringVar(value="")
         ttk.Label(options, textvariable=self.status, foreground="#555555").grid(
-            row=1, column=0, sticky="w", pady=(6, 0)
+            row=3, column=0, sticky="w", pady=(6, 0)
         )
 
         self.progress = ttk.Progressbar(options, mode="determinate", maximum=1)
-        self.progress.grid(row=2, column=0, sticky="ew", pady=(6, 0))
+        self.progress.grid(row=4, column=0, sticky="ew", pady=(6, 0))
         options.columnconfigure(0, weight=1)
 
         actions = ttk.Frame(self)
@@ -155,10 +168,22 @@ class PreviewWindow(tk.Toplevel):
             return
 
         total_size = sum(self.plan.items[i].size for i in selected)
+        keep_backup = bool(self.var_keep_backup.get())
+
+        if keep_backup:
+            backup_lines = (
+                "• 文件与目录会移动到隔离区，可随时还原\n"
+                "• 注册表项会先导出备份，再删除\n"
+            )
+        else:
+            backup_lines = (
+                "• 文件与目录将被【永久删除】，无法从隔离区恢复\n"
+                "• 注册表项将直接删除，不保留备份\n"
+            )
+
         question = (
             f"即将清理 {len(selected)} 项内容（约 {format_bytes(total_size)}）。\n\n"
-            "• 文件与目录会被移动到隔离区，可随时还原\n"
-            "• 注册表项会先导出备份，再删除\n"
+            f"{backup_lines}"
             "• 服务会被停止并删除\n\n"
             "是否继续？"
         )
@@ -171,20 +196,23 @@ class PreviewWindow(tk.Toplevel):
         self.btn_start.configure(state="disabled")
         self.btn_cancel.configure(state="disabled")
         self.chk_restore.configure(state="disabled")
+        self.chk_keep_backup.configure(state="disabled")
         self.progress.configure(maximum=max(1, self.total), value=0)
         self.status.set("正在清理，请稍候…")
 
         make_restore_point = bool(self.var_restore_point.get())
         thread = threading.Thread(
-            target=self._worker, args=(selected, make_restore_point), daemon=True
+            target=self._worker, args=(selected, make_restore_point, keep_backup),
+            daemon=True,
         )
         thread.start()
         self.after(100, self._poll)
 
-    def _worker(self, selected: list[int], make_restore_point: bool) -> None:
+    def _worker(self, selected: list[int], make_restore_point: bool,
+                keep_backup: bool) -> None:
         try:
             result = execute(
-                self.plan, selected, make_restore_point,
+                self.plan, selected, make_restore_point, keep_backup,
                 progress=lambda done, total, _label: self.queue.put(
                     ("progress", done, total)
                 ),
@@ -229,7 +257,10 @@ class PreviewWindow(tk.Toplevel):
         elif result.restore_point_error:
             lines.append(f"系统还原点：未创建（{result.restore_point_error}）")
 
-        lines += ["", "备份目录：", result.session_dir]
+        if result.kept_backup and result.session_dir:
+            lines += ["", "备份目录：", result.session_dir]
+        else:
+            lines += ["", "备份：未保留（文件已永久删除，无法还原）"]
 
         if result.errors:
             lines += ["", "失败详情："]

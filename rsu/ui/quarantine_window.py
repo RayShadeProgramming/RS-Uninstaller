@@ -6,7 +6,13 @@ import os
 import tkinter as tk
 from tkinter import messagebox, ttk
 
-from ..backup import list_sessions, quarantine_root, restore_session
+from ..backup import (
+    clear_quarantine,
+    list_sessions,
+    quarantine_root,
+    restore_session,
+)
+from ..util import dir_size, format_bytes
 
 
 class QuarantineWindow(tk.Toplevel):
@@ -60,10 +66,13 @@ class QuarantineWindow(tk.Toplevel):
         )
         ttk.Button(footer, text="打开目录", width=12,
                    command=self.open_folder).grid(row=0, column=1, padx=(8, 8))
+        self.btn_clear = ttk.Button(footer, text="清空隔离区", width=14,
+                                    command=self.clear_all)
+        self.btn_clear.grid(row=0, column=2, padx=(0, 8))
         ttk.Button(footer, text="还原此会话", width=14,
-                   command=self.restore_selected).grid(row=0, column=2, padx=(0, 8))
+                   command=self.restore_selected).grid(row=0, column=3, padx=(0, 8))
         ttk.Button(footer, text="关闭", width=10,
-                   command=self.destroy).grid(row=0, column=3)
+                   command=self.destroy).grid(row=0, column=4)
 
     def _center(self, master) -> None:
         self.update_idletasks()
@@ -108,6 +117,48 @@ class QuarantineWindow(tk.Toplevel):
             os.startfile(folder)  # noqa: S606
         except OSError as exc:
             messagebox.showerror("打开失败", str(exc), parent=self)
+
+    def clear_all(self) -> None:
+        if not self.sessions:
+            messagebox.showinfo("提示", "隔离区已经是空的。", parent=self)
+            return
+
+        total_size = 0
+        for name in self.sessions:
+            total_size += dir_size(os.path.join(quarantine_root(), name))
+
+        question = (
+            f"将永久删除隔离区中的 {len(self.sessions)} 个会话"
+            f"（约 {format_bytes(total_size)}）。\n\n"
+            "删除后这些备份无法再还原，是否继续？"
+        )
+        if not messagebox.askyesno("清空隔离区", question, icon="warning",
+                                   default=messagebox.NO, parent=self):
+            return
+
+        self.configure(cursor="watch")
+        self.btn_clear.configure(state="disabled")
+        self.update_idletasks()
+        try:
+            deleted, failed, errors = clear_quarantine()
+        except Exception as exc:  # noqa: BLE001
+            self.configure(cursor="")
+            self.btn_clear.configure(state="normal")
+            messagebox.showerror("清空失败", str(exc), parent=self)
+            return
+
+        self.configure(cursor="")
+        self.btn_clear.configure(state="normal")
+
+        lines = [f"已删除 {deleted} 个会话。"]
+        if failed:
+            lines.append("")
+            lines.append(f"失败 {failed} 个：")
+            for error in errors[:5]:
+                lines.append(f"• {error}")
+
+        messagebox.showinfo("清空结果", "\n".join(lines), parent=self)
+        self.reload()
 
     def restore_selected(self) -> None:
         name = self._selected_session()

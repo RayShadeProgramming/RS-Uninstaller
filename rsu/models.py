@@ -54,6 +54,7 @@ class CleanResult:
     failed: int = 0
     errors: list[str] = field(default_factory=list)
     session_dir: str = ""
+    kept_backup: bool = False
     restore_point_created: bool = False
     restore_point_error: str = ""
 
