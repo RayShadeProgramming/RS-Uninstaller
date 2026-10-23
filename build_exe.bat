@@ -2,11 +2,11 @@
 REM ============================================================
 REM  RS-Uninstaller 单文件打包脚本
 REM  前置：python -m pip install pyinstaller
-REM  产物：dist\RS-Uninstaller-0.1.1.exe
+REM  产物：dist\RS-Uninstaller-0.1.2.exe
 REM ============================================================
 
 set APP_NAME=RS-Uninstaller
-set APP_VERSION=0.1.1
+set APP_VERSION=0.1.2
 
 pyinstaller --noconfirm --clean --onefile --windowed ^
   --uac-admin ^

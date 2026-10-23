@@ -2,7 +2,7 @@
 
 > Windows 上真正「卸得干净」的卸载工具 —— 跳过软件自带的卸载程序，直接清理程序文件、用户数据与注册表残留。
 >
-> 当前版本：**v0.1.1**
+> 当前版本：**v0.1.2**
 
 ---
 
@@ -58,9 +58,9 @@ RS-Uninstaller 换了个思路：**不运行软件自带的卸载程序**，而�
 
 ### 方式一：直接运行（推荐）
 
-1. 下载 `RS-Uninstaller-0.1.1.exe`，放到任意目录（无需安装）；
+1. 下载 `RS-Uninstaller-0.1.2.exe`，放到任意目录（无需安装）；
 2. 双击运行，在 UAC 提示中点「是」（清理系统级文件与注册表需要管理员权限）；
-3. 在列表中找到要卸载的软件（支持搜索、排序），点击「卸载选中软件」；
+3. 在列表中找到要卸载的软件（支持搜索、排序；每次启动会自动重新扫描，也可按 F5 或点「刷新」手动更新），选中后点「卸载选中软件」；
 4. 查看清理清单，确认无误后点「开始清理」（默认永久删除；需要可还原时勾选「保留备份到隔离区」）；
 5. 完成后查看结果；如有问题，从「隔离区 / 还原」恢复。
 
@@ -90,13 +90,13 @@ build_exe.bat
 
 ```bat
 python -m PyInstaller --noconfirm --clean --onefile --windowed --uac-admin ^
-  --name "RS-Uninstaller-0.1.1" ^
+  --name "RS-Uninstaller-0.1.2" ^
   --icon "res\icon.ico" ^
   --add-data "res\icon.ico;res" ^
   run.py
 ```
 
-产物：`dist\RS-Uninstaller-0.1.1.exe`
+产物：`dist\RS-Uninstaller-0.1.2.exe`
 
 ---
 

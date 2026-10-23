@@ -89,8 +89,26 @@ def enum_values(root, view: int, path: str) -> list[tuple[str, object, int]]:
                 out.append((name, value, kind))
                 index += 1
     except OSError:
-        return []
+        return out
     return out
+
+
+def read_values(root, view: int, path: str) -> dict[str, tuple[object, int]]:
+    """一次性读取某个键的全部值，避免每个字段都重新打开注册表键。"""
+    values: dict[str, tuple[object, int]] = {}
+    try:
+        with winreg.OpenKey(root, path, 0, winreg.KEY_READ | view) as key:
+            index = 0
+            while True:
+                try:
+                    name, value, kind = winreg.EnumValue(key, index)
+                except OSError:
+                    break
+                values[name] = (value, kind)
+                index += 1
+    except OSError:
+        return values
+    return values
 
 
 def create_key(root, view: int, path: str):

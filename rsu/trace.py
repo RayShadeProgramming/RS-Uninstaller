@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import ctypes
 import os
-import winreg
+from ctypes import wintypes
 
 from . import win_svc
 from . import winreg_api as wreg
@@ -12,7 +13,6 @@ from .util import (
     dir_size,
     is_protected_path,
     normalize_token,
-    path_exists,
     strip_decorations,
 )
 
@@ -92,22 +92,32 @@ def _command_exe(command: str) -> str:
     return text.split()[0]
 
 
-def _loose_path_match(name: str, matcher: "Matcher") -> bool:
-    """目录名与产品名的宽松匹配：允许 1~2 个字符的前后缀差异。
+def _tiny_suffix(shorter: str, longer: str) -> bool:
+    """longer 是否只比 shorter 多出 1~2 个相同字符（如 devc → devcpp）。"""
+    if not shorter or not longer.startswith(shorter):
+        return False
+    extra = longer[len(shorter):]
+    if not extra or len(extra) > 2:
+        return False
+    return len(set(extra)) == 1
 
-    例如 "Dev-C++"（归一化为 devc）与目录 "Dev-Cpp"（devcpp）。
+
+def _loose_path_match(name: str, matcher: "Matcher") -> bool:
+    """目录名与产品名的宽松匹配，用于定位安装目录。
+
+    只在「完全相等」或「末尾多 1~2 个重复字符」时放宽，
+    避免 Java → JavaFX 这类误伤。
     """
     value = normalize_token(name)
     if len(value) < 3:
         return False
     if matcher.strong_match(name):
         return True
+
     for candidate in matcher.names:
         if len(candidate) < 4:
             continue
-        if value.startswith(candidate) and len(value) - len(candidate) <= 2:
-            return True
-        if candidate.startswith(value) and len(candidate) - len(value) <= 2:
+        if _tiny_suffix(value, candidate) or _tiny_suffix(candidate, value):
             return True
     return False
 
@@ -209,7 +219,7 @@ def _scan_data_root(plan: CleanPlan, root: str, matcher: Matcher) -> None:
         except OSError:
             continue
 
-        if matcher.strong_match(entry.name):
+        if _loose_path_match(entry.name, matcher):
             add_folder(plan, entry.path)
             continue
 
@@ -222,10 +232,96 @@ def _scan_data_root(plan: CleanPlan, root: str, matcher: Matcher) -> None:
             continue
         for child in children:
             try:
-                if child.is_dir(follow_symlinks=False) and matcher.strong_match(child.name):
+                if child.is_dir(follow_symlinks=False) and _loose_path_match(child.name, matcher):
                     add_folder(plan, child.path)
             except OSError:
                 continue
+
+
+def _fixed_drives() -> list[str]:
+    """只枚举本机固定磁盘，避免光驱 / 可移动盘拖慢扫描。"""
+    try:
+        kernel32 = ctypes.windll.kernel32
+        kernel32.GetLogicalDrives.restype = wintypes.DWORD
+        kernel32.GetDriveTypeW.argtypes = [wintypes.LPCWSTR]
+        kernel32.GetDriveTypeW.restype = wintypes.UINT
+        mask = kernel32.GetLogicalDrives()
+    except Exception:  # noqa: BLE001
+        return []
+
+    drives: list[str] = []
+    for index in range(26):
+        if not mask & (1 << index):
+            continue
+        root = f"{chr(ord('A') + index)}:\\"
+        try:
+            if kernel32.GetDriveTypeW(root) == 3:  # DRIVE_FIXED
+                drives.append(root)
+        except Exception:  # noqa: BLE001
+            continue
+    return drives
+
+
+def _program_roots() -> list[str]:
+    roots: list[str] = []
+    seen: set[str] = set()
+
+    candidates: list[str] = []
+    for drive in _fixed_drives():
+        candidates.append(os.path.join(drive, "Program Files"))
+        candidates.append(os.path.join(drive, "Program Files (x86)"))
+    for env in ("ProgramFiles", "ProgramFiles(x86)"):
+        value = os.environ.get(env)
+        if value:
+            candidates.append(value)
+
+    for path in candidates:
+        key = os.path.normcase(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        if os.path.isdir(path):
+            roots.append(path)
+    return roots
+
+
+def _scan_program_dirs(plan: CleanPlan, matcher: Matcher) -> None:
+    """在 Program Files 下按名称匹配目录。
+
+    覆盖「注册表里没有 InstallLocation / DisplayIcon 可用路径」的软件，
+    只扫一层目录（厂商目录再下探一层），开销很小。
+    """
+    for root in _program_roots():
+        try:
+            entries = list(os.scandir(root))
+        except OSError:
+            continue
+
+        for entry in entries:
+            try:
+                if not entry.is_dir(follow_symlinks=False):
+                    continue
+            except OSError:
+                continue
+
+            if _loose_path_match(entry.name, matcher):
+                add_folder(plan, entry.path)
+                continue
+
+            if not matcher.vendor_match(entry.name):
+                continue
+
+            try:
+                children = list(os.scandir(entry.path))
+            except OSError:
+                continue
+            for child in children:
+                try:
+                    if child.is_dir(follow_symlinks=False) and \
+                            _loose_path_match(child.name, matcher):
+                        add_folder(plan, child.path)
+                except OSError:
+                    continue
 
 
 def _scan_shortcut_dir(plan: CleanPlan, directory: str, matcher: Matcher, depth: int = 0) -> None:
@@ -323,10 +419,13 @@ def build_clean_plan(item: SoftwareItem) -> CleanPlan:
     _scan_vendor_reg_root(plan, "HKLM", wreg.VIEW_64, "Software", matcher)
     _scan_vendor_reg_root(plan, "HKLM", wreg.VIEW_32, "Software", matcher)
 
-    # 3) 安装目录：InstallLocation 优先，其次从 DisplayIcon / UninstallString 推导
+    # 3) 安装目录：InstallLocation → DisplayIcon / UninstallString → Program Files 扫描
     candidates: list[str] = []
     if item.install_location:
-        candidates.append(item.install_location)
+        location = item.install_location
+        if os.path.isfile(location):
+            location = os.path.dirname(location)
+        candidates.append(location)
 
     for raw in (item.display_icon, item.uninstall_string):
         exe = _command_exe(raw)
@@ -338,12 +437,15 @@ def build_clean_plan(item: SoftwareItem) -> CleanPlan:
     for directory in candidates:
         add_folder(plan, directory)
 
-    # 完全没有定位到目录时，再尝试 Program Files 下的同名目录
+    # 仍未定位到目录时，逐级扩大搜索范围
     if not any(entry.kind == ItemType.FOLDER for entry in plan.items):
         for env in ("ProgramFiles", "ProgramFiles(x86)"):
             base = os.environ.get(env)
             if base:
                 add_folder(plan, os.path.join(base, item.display_name))
+
+    if not any(entry.kind == ItemType.FOLDER for entry in plan.items):
+        _scan_program_dirs(plan, matcher)
 
     # 4) 用户数据目录
     local_app = os.environ.get("LOCALAPPDATA", "")

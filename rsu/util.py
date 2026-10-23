@@ -5,11 +5,12 @@ from __future__ import annotations
 import datetime
 import functools
 import os
+import re
 import sys
 import threading
 
 APP_NAME = "RS-Uninstaller"
-APP_VERSION = "0.1.1"
+APP_VERSION = "0.1.2"
 
 _log_lock = threading.Lock()
 
@@ -73,21 +74,29 @@ def is_all_digits(text: str) -> bool:
     return bool(text) and text.isdigit()
 
 
+_VERSION_TOKEN = re.compile(r"^[vV]?\d[\d.]*$")
+
+
 def strip_decorations(name: str) -> str:
-    """去掉结尾括号内容与版本号，得到更稳定的名称。"""
+    """去掉结尾括号内容与版本号，得到更稳定的名称。
+
+    例如：
+      "7-Zip 25.01 (x64)"        -> "7-Zip"
+      "Notepad++ 8.6"            -> "Notepad++"
+      "Adobe Acrobat Reader 2024" -> "Adobe Acrobat Reader"
+    """
     s = (name or "").strip()
     for _ in range(4):
         t = s.strip()
         if t.endswith(")") and "(" in t:
-            s = t[: t.rfind("(")].strip()
-            continue
+            stripped = t[: t.rfind("(")].strip()
+            if stripped:
+                s = stripped
+                continue
         parts = t.split()
-        if parts:
+        if len(parts) > 1:
             last = parts[-1]
-            looks_version = last.isdigit() or (
-                last.lower().startswith("v") and any(c.isdigit() for c in last)
-            )
-            if looks_version and t.rfind(last) > 0:
+            if _VERSION_TOKEN.match(last) and t.rfind(last) > 0:
                 s = t[: t.rfind(last)].strip()
                 continue
         break

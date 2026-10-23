@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 import tkinter as tk
 from tkinter import ttk
 
@@ -29,12 +30,17 @@ class MainWindow(ttk.Frame):
         self.by_iid: dict[str, SoftwareItem] = {}
         self.sort_key = "name"
         self.sort_reverse = False
+        self.last_scan = ""
         self.query = tk.StringVar()
         self.status = tk.StringVar(value="正在扫描…")
 
         self._build()
         self.query.trace_add("write", lambda *_: self.populate())
-        self.refresh()
+
+        # 每次启动都重新扫描；F5 / Ctrl+R 可随时手动刷新
+        self.master.bind("<F5>", lambda _e: self.refresh())
+        self.master.bind("<Control-r>", lambda _e: self.refresh())
+        self.after(30, self.refresh)
 
     # -------------------------------------------------------------- 界面
 
@@ -48,9 +54,9 @@ class MainWindow(ttk.Frame):
         ttk.Label(top, text="搜索").grid(row=0, column=0, padx=(0, 6))
         self.search_entry = ttk.Entry(top, textvariable=self.query)
         self.search_entry.grid(row=0, column=1, sticky="ew", ipady=3)
-        ttk.Button(top, text="刷新", width=10, command=self.refresh).grid(
-            row=0, column=2, padx=(8, 0)
-        )
+        self.btn_refresh = ttk.Button(top, text="刷新 (F5)", width=12,
+                                      command=self.refresh)
+        self.btn_refresh.grid(row=0, column=2, padx=(8, 0))
 
         body = ttk.Frame(self)
         body.grid(row=1, column=0, sticky="nsew")
@@ -90,14 +96,20 @@ class MainWindow(ttk.Frame):
     # -------------------------------------------------------------- 数据
 
     def refresh(self) -> None:
-        self.status.set("正在扫描…")
+        self.btn_refresh.configure(state="disabled")
+        self.configure(cursor="watch")
+        self.status.set("正在扫描本机软件…")
         self.update_idletasks()
         try:
             self.items = scan_installed_software()
+            self.last_scan = time.strftime("%H:%M:%S")
+            log(f"扫描完成，共 {len(self.items)} 个软件")
         except Exception as exc:  # noqa: BLE001
             log(f"扫描失败：{exc}")
             self.items = []
-        log(f"扫描完成，共 {len(self.items)} 个软件")
+        finally:
+            self.configure(cursor="")
+            self.btn_refresh.configure(state="normal")
         self.populate()
 
     def populate(self) -> None:
@@ -136,6 +148,8 @@ class MainWindow(ttk.Frame):
         text = f"共 {len(self.items)} 个软件"
         if len(rows) != len(self.items):
             text += f"，当前显示 {len(rows)} 个"
+        if self.last_scan:
+            text += f"　·　扫描于 {self.last_scan}"
         self.status.set(text)
         self._update_buttons()
 
