@@ -2,7 +2,7 @@
 
 > Windows 上真正「卸得干净」的卸载工具 —— 跳过软件自带的卸载程序，直接清理程序文件、用户数据与注册表残留。
 >
-> 当前版本：**v0.1.2**
+> 当前版本：**v0.2.0**
 
 ---
 
@@ -36,7 +36,10 @@ RS-Uninstaller 换了个思路：**不运行软件自带的卸载程序**，而�
 默认直接永久删除，不额外占用磁盘空间；需要可恢复时，可在清理前勾选「保留备份到隔离区」，文件与注册表会先备份，随时能还原。
 
 **单文件绿色版**
-一个 `.exe`，下载即用，不需要安装，不依赖任何运行时或第三方组件。
+一个 `.exe`，下载即用，不需要安装；除系统自带的 WebView2 外不依赖其他组件。
+
+**现代简洁界面**
+浅色卡片式布局与清晰的信息层级，列表再长也能快速浏览、定位与确认。
 
 ---
 
@@ -58,7 +61,7 @@ RS-Uninstaller 换了个思路：**不运行软件自带的卸载程序**，而�
 
 ### 方式一：直接运行（推荐）
 
-1. 下载 `RS-Uninstaller-0.1.2.exe`，放到任意目录（无需安装）；
+1. 下载 `RS-Uninstaller-0.2.0.exe`，放到任意目录（无需安装）；
 2. 双击运行，在 UAC 提示中点「是」（清理系统级文件与注册表需要管理员权限）；
 3. 在列表中找到要卸载的软件（支持搜索、排序；每次启动会自动重新扫描，也可按 F5 或点「刷新」手动更新），选中后点「卸载选中软件」；
 4. 查看清理清单，确认无误后点「开始清理」（默认永久删除；需要可还原时勾选「保留备份到隔离区」）；
@@ -69,11 +72,10 @@ RS-Uninstaller 换了个思路：**不运行软件自带的卸载程序**，而�
 
 ### 方式二：从源码运行（开发者）
 
-需要 Python 3.10+，Windows 官方安装包默认自带 tkinter，无需安装任何第三方依赖。
+需要 Python 3.10+。先安装依赖：
 
 ```bash
-# 进入项目目录
-cd RS-Uninstaller
+python -m pip install -r requirements.txt
 
 # 启动（启动时会自动请求管理员权限）
 python run.py
@@ -93,13 +95,17 @@ build_exe.bat
 
 ```bat
 python -m PyInstaller --noconfirm --clean --onefile --windowed --uac-admin ^
-  --name "RS-Uninstaller-0.1.2" ^
+  --name "RS-Uninstaller-0.2.0" ^
   --icon "res\icon.ico" ^
   --add-data "res\icon.ico;res" ^
+  --collect-all nicegui ^
+  --collect-all webview ^
+  --collect-all pythonnet ^
+  --collect-all clr_loader ^
   run.py
 ```
 
-产物：`dist\RS-Uninstaller-0.1.2.exe`
+产物：`dist\RS-Uninstaller-0.2.0.exe`
 
 ---
 
@@ -107,8 +113,9 @@ python -m PyInstaller --noconfirm --clean --onefile --windowed --uac-admin ^
 
 - **操作系统**：Windows 10 / Windows 11（64 位）
 - **权限**：管理员权限（清理系统目录与 `HKLM` 注册表时需要）
-- **磁盘空间**：建议预留一定空间用于备份与隔离区
-- **其他**：无需安装 Python、.NET、Java 等任何运行时，发布版为单个可执行文件
+- **运行组件**：界面基于 WebView2，Windows 11 与已更新的 Windows 10 默认包含；若提示缺失，请安装「Microsoft Edge WebView2 Runtime」
+- **磁盘空间**：单文件版首次启动会解压到临时目录，建议预留约 150 MB；隔离区备份另计
+- **其他**：无需安装 Python、Java 等运行时，发布版为单个可执行文件
 
 ---
 

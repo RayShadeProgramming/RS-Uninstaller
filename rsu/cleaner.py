@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 
 from . import backup
 from . import win_svc
@@ -13,7 +14,8 @@ from .util import log
 
 
 def execute(plan: CleanPlan, selected: list[int], make_restore_point: bool,
-            keep_backup: bool, progress=None) -> CleanResult:
+            keep_backup: bool,
+            progress: Callable[[int, int, str], None] | None = None) -> CleanResult:
     """执行清理。
 
     keep_backup=False（默认）：文件永久删除、注册表直接删除，不留备份。

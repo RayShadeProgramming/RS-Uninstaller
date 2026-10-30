@@ -1,50 +1,118 @@
-"""应用入口：权限检查、DPI、主题与主窗口。"""
+"""应用入口：管理员权限检查 + NiceGUI 原生窗口启动。"""
 
 from __future__ import annotations
 
 import ctypes
+import multiprocessing
 import os
-import tkinter as tk
-from tkinter import ttk
+import threading
+import time
+from ctypes import wintypes
 
 from .privileges import is_admin, relaunch_as_admin
-from .ui.main_window import MainWindow
 from .util import APP_NAME, APP_VERSION, log, resource_path
 
+WM_SETICON = 0x0080
+ICON_SMALL = 0
+ICON_BIG = 1
+SPI_GETWORKAREA = 0x0030
 
-def _set_dpi_awareness() -> None:
+
+class _RECT(ctypes.Structure):
+    _fields_ = [("left", wintypes.LONG), ("top", wintypes.LONG),
+                ("right", wintypes.LONG), ("bottom", wintypes.LONG)]
+
+
+def _work_area() -> tuple[int, int, int, int]:
+    """返回任务栏之外的可用工作区（物理像素）。"""
+    user32 = ctypes.windll.user32
+    rect = _RECT()
+    if user32.SystemParametersInfoW(SPI_GETWORKAREA, 0, ctypes.byref(rect), 0):
+        return rect.left, rect.top, rect.right, rect.bottom
+    return 0, 0, user32.GetSystemMetrics(0), user32.GetSystemMetrics(1)
+
+
+def _favicon() -> str:
+    path = resource_path(os.path.join("res", "icon.ico"))
+    return path if os.path.exists(path) else "🗂️"
+
+
+def _window_size() -> tuple[int, int]:
+    """按屏幕工作区（排除任务栏）计算窗口尺寸，逻辑像素。"""
     try:
-        ctypes.windll.shcore.SetProcessDpiAwareness(1)
-    except Exception:  # noqa: BLE001
+        user32 = ctypes.windll.user32
         try:
-            ctypes.windll.user32.SetProcessDPIAware()
+            dpi = user32.GetDpiForSystem()
         except Exception:  # noqa: BLE001
-            pass
+            dpi = 96
+        scale = 96.0 / max(dpi, 96)
+        left, top, right, bottom = _work_area()
+        work_w = int((right - left) * scale)
+        work_h = int((bottom - top) * scale)
+    except Exception:  # noqa: BLE001
+        return 1320, 860
+
+    width = min(1320, max(980, work_w - 80))
+    height = min(860, max(620, work_h - 70))
+    return width, height
 
 
-def _apply_theme(root: tk.Tk) -> None:
-    style = ttk.Style(root)
-    for theme in ("vista", "winnative", "clam"):
-        if theme in style.theme_names():
-            style.theme_use(theme)
-            break
+def _polish_window(title: str) -> None:
+    """把系统标题栏切成深色，并换上应用图标（原生窗口默认是白色标题栏）。"""
+    icon_path = resource_path(os.path.join("res", "icon.ico"))
 
-    family = "Microsoft YaHei UI"
-    root.option_add("*Font", (family, 10))
-    style.configure(".", font=(family, 10))
-    style.configure("Treeview", font=(family, 10), rowheight=28)
-    style.configure("Treeview.Heading", font=(family, 10, "bold"))
-    style.configure("TButton", padding=(10, 5))
-    style.configure("TCheckbutton", padding=(0, 3))
+    def worker() -> None:
+        user32 = ctypes.windll.user32
+        dwmapi = ctypes.windll.dwmapi
+        deadline = time.time() + 25
+        while time.time() < deadline:
+            hwnd = user32.FindWindowW(None, title)
+            if hwnd:
+                if os.path.exists(icon_path):
+                    icon = user32.LoadImageW(
+                        None, icon_path, 1, 0, 0, 0x10  # IMAGE_ICON, LR_LOADFROMFILE
+                    )
+                    if icon:
+                        user32.SendMessageW(hwnd, WM_SETICON, ICON_BIG, icon)
+                        user32.SendMessageW(hwnd, WM_SETICON, ICON_SMALL, icon)
+
+                # 居中到可用工作区，保证底部操作栏不会被任务栏盖住
+                rect = _RECT()
+                user32.GetWindowRect(hwnd, ctypes.byref(rect))
+                left, top, right, bottom = _work_area()
+                win_w = rect.right - rect.left
+                win_h = rect.bottom - rect.top
+                x = left + max(0, ((right - left) - win_w) // 2)
+                y = top + max(0, ((bottom - top) - win_h) // 2)
+                user32.SetWindowPos(hwnd, 0, x, y, 0, 0, 0x0001 | 0x0004)  # NOSIZE|NOZORDER
+
+                # 部分系统需要等窗口真正显示后重复设置才生效（0 = 浅色标题栏）
+                for _ in range(6):
+                    value = ctypes.c_int(0)
+                    dwmapi.DwmSetWindowAttribute(
+                        hwnd, 20, ctypes.byref(value), ctypes.sizeof(value)
+                    )
+                    user32.SetWindowPos(
+                        hwnd, 0, 0, 0, 0, 0,
+                        0x0020 | 0x0002 | 0x0004 | 0x0001,  # FRAMECHANGED|NOMOVE|NOZORDER|NOSIZE
+                    )
+                    time.sleep(0.5)
+                return
+            time.sleep(0.25)
+
+    threading.Thread(target=worker, daemon=True).start()
 
 
 def main() -> None:
+    # PyInstaller + 多进程（NiceGUI 内部可能用到）必须调用
+    multiprocessing.freeze_support()
+
     if os.name != "nt":
         raise SystemExit("RS-Uninstaller 仅支持 Windows。")
 
     if not is_admin():
         if relaunch_as_admin():
-            raise SystemExit(0)
+            return
         ctypes.windll.user32.MessageBoxW(
             None,
             "RS-Uninstaller 需要管理员权限才能清理系统目录与注册表。\n"
@@ -52,37 +120,25 @@ def main() -> None:
             APP_NAME,
             0x10,
         )
-        raise SystemExit(1)
+        return
 
-    _set_dpi_awareness()
+    # 先注册页面，再启动服务；延迟导入避免多进程启动时重复执行界面代码
+    from nicegui import ui
 
-    root = tk.Tk()
-    root.title(f"{APP_NAME} {APP_VERSION}")
-    root.minsize(960, 580)
+    from .ui_web.page_main import main_page  # noqa: F401  注册 "/" 页面
 
-    try:
-        root.iconbitmap(resource_path("res/icon.ico"))
-    except tk.TclError:
-        pass
-
-    try:
-        dpi = ctypes.windll.user32.GetDpiForSystem()
-        root.tk.call("tk", "scaling", dpi / 72.0)
-    except Exception:  # noqa: BLE001
-        pass
-
-    _apply_theme(root)
-
-    width, height = 1120, 720
-    screen_w = root.winfo_screenwidth()
-    screen_h = root.winfo_screenheight()
-    x = max((screen_w - width) // 2, 0)
-    y = max((screen_h - height) // 2, 0)
-    root.geometry(f"{width}x{height}+{x}+{y}")
-
-    MainWindow(root).pack(fill="both", expand=True)
-    log(f"启动 {APP_NAME} {APP_VERSION}")
-    root.mainloop()
+    title = f"{APP_NAME} {APP_VERSION}"
+    width, height = _window_size()
+    log(f"启动 {title}，窗口 {width}x{height}")
+    _polish_window(title)
+    ui.run(
+        native=True,
+        window_size=(width, height),
+        title=title,
+        favicon=_favicon(),
+        reload=False,
+        show=False,
+    )
 
 
 if __name__ == "__main__":
